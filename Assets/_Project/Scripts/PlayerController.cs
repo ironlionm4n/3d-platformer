@@ -27,19 +27,27 @@ namespace Platformer._Project.Scripts
         [SerializeField] private float jumpForce = 10f;
         [SerializeField] private float jumpDuration = 0.5f;
         [SerializeField] private float jumpCooldown = 0f;
-        [SerializeField] private float jumpMaxHeight = 2f;
         [SerializeField] private float gravityMultiplier = 3f;
+        [Header("Dash Settings")]
+        [SerializeField] private float dashForce = 10f;
+        [SerializeField] private float dashDuration = 1f;
+        [SerializeField] private float dashCooldown = 2f;
         
         private Transform mainCam;
         private const float ZeroF = 0;
         private float currentSpeed;
         private float velocity;
         private float jumpVelocity;
+        private float dashVelocity = 1f;
+        
         private Vector3 movement;
         private List<Timer> timers;
         private CountdownTimer jumpTimer;
         private CountdownTimer jumpCooldownTimer;
-        
+        private CountdownTimer dashTimer;
+        private CountdownTimer dashCooldownTimer;
+
+        private StateMachine stateMachine;
         private static readonly int Speed = Animator.StringToHash("Speed");
 
         private void Awake()
@@ -54,14 +62,43 @@ namespace Platformer._Project.Scripts
             // Setup timers
             jumpTimer = new CountdownTimer(jumpDuration);
             jumpCooldownTimer = new CountdownTimer(jumpCooldown);
-            timers = new (2) { jumpTimer, jumpCooldownTimer };
-            
+            dashTimer = new CountdownTimer(dashDuration);
+            dashCooldownTimer = new CountdownTimer(dashCooldown);
+            jumpTimer.OnTimerStart += () => jumpVelocity = jumpForce;
             jumpTimer.OnTimerStop += () => jumpCooldownTimer.Start();
+            dashTimer.OnTimerStart += () => dashVelocity = dashForce;
+            dashTimer.OnTimerStop += () =>
+            {
+                dashVelocity = 1f;
+                dashCooldownTimer.Start();
+            };
+            timers = new (4) { jumpTimer, jumpCooldownTimer, dashTimer, dashCooldownTimer };
+            
+            // State Machine
+            stateMachine = new StateMachine();
+            // Declare states
+            var locomotionState = new LocomotionState(this, animator);
+            var jumpState = new JumpState(this, animator);
+            var dashState = new DashState(this, animator);
+            
+            // Declare transitions
+            At(locomotionState, jumpState, new FuncPredicate(()=> jumpTimer.IsRunning));
+            At(locomotionState, dashState, new FuncPredicate(()=> dashTimer.IsRunning));
+            Any(locomotionState, new FuncPredicate(()=> !jumpTimer.IsRunning && groundCheck.IsGrounded && !dashTimer.IsRunning));
+            
+   
+            
+            // Set initial state
+            stateMachine.SetState(locomotionState);
         }
+
+        void At(IState from, IState to, IPredicate condition) => stateMachine.AddTransition(from, to, condition);
+        void Any(IState to, IPredicate condition) => stateMachine.AddAnyTransition(to, condition);
 
         private void OnEnable()
         {
             input.Jump += OnJump;
+            input.Dash += OnDash;
         }
 
 
@@ -69,6 +106,7 @@ namespace Platformer._Project.Scripts
         private void OnDisable()
         {
             input.Jump -= OnJump;
+            input.Dash -= OnDash;
         }
 
         private void Start() => input.EnablePlayerActions();
@@ -76,15 +114,14 @@ namespace Platformer._Project.Scripts
         private void Update()
         {
             movement = new Vector3(input.Direction.x, 0f, input.Direction.y);
-
+            stateMachine.Update();
             HandleTimers();
             UpdateAnimator();
         }
         
         private void FixedUpdate()
         {
-            HandleJump();
-            HandleMovement();
+            stateMachine.FixedUpdate();
         }
 
         private void HandleTimers()
@@ -108,8 +145,22 @@ namespace Platformer._Project.Scripts
                 jumpTimer.Stop();
             }
         }
+
+        private void OnDash(bool performed)
+        {
+            if(performed && !dashTimer.IsRunning && !dashCooldownTimer.IsRunning)
+            {
+                // Start dash
+                dashTimer.Start();
+            }
+            else if(!performed && dashTimer.IsRunning)
+            {
+                // Stop dash
+                dashTimer.Stop();
+            }
+        }
         
-        private void HandleJump()
+        public void HandleJump()
         {
             // On ground and not jumping, reset velocity to zero and timer
             if (!jumpTimer.IsRunning && groundCheck.IsGrounded)
@@ -120,22 +171,7 @@ namespace Platformer._Project.Scripts
             }
             
             // if jumping or falling calculate velocity
-            if (jumpTimer.IsRunning)
-            {
-                // Progress point for initial burst of velocity
-                float launchPoint = 0.9f;
-                if (jumpTimer.Progress > launchPoint)
-                {
-                    // Calculate the velocity required to reach the jump height using physics equations v = sqrt(2gh)
-                    jumpVelocity = Mathf.Sqrt(2 * jumpMaxHeight * Mathf.Abs(Physics.gravity.y));
-                }
-                else
-                {
-                    // Gradually apply less velocity as jump progresses
-                    jumpVelocity += (1-jumpTimer.Progress) * jumpForce * Time.deltaTime;
-                }
-            }
-            else
+            if (!jumpTimer.IsRunning)
             {
                 // Gravity takes over
                 jumpVelocity += Physics.gravity.y * gravityMultiplier * Time.deltaTime;
@@ -150,7 +186,7 @@ namespace Platformer._Project.Scripts
             animator.SetFloat(Speed, currentSpeed);
         }
 
-        private void HandleMovement()
+        public void HandleMovement()
         {
             // Rotate movement direction to match camera rotation
             var adjustedDirection = Quaternion.AngleAxis(mainCam.eulerAngles.y, Vector3.up) * movement;
@@ -171,7 +207,7 @@ namespace Platformer._Project.Scripts
         private void HandleHorizontalMovement(Vector3 adjustedDirection)
         {
             // Move the player
-            var velocity = adjustedDirection * (speed * Time.fixedDeltaTime);
+            var velocity = adjustedDirection * (speed * dashVelocity * Time.fixedDeltaTime);
             rb.velocity = new Vector3(velocity.x, rb.velocity.y, velocity.z);
         }
 
@@ -179,7 +215,7 @@ namespace Platformer._Project.Scripts
         {
             var targetRotation = Quaternion.LookRotation(adjustedDirection);
             transform.rotation = Quaternion.RotateTowards(transform.rotation, targetRotation, rotationSpeed * Time.deltaTime);
-            transform.LookAt(transform.position + adjustedDirection);
+            //transform.LookAt(transform.position + adjustedDirection);
         }
 
         private void SmoothSpeed(float value)
