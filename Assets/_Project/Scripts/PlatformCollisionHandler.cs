@@ -18,5 +18,14 @@ namespace Platformer._Project.Scripts
                 transform.SetParent(platform);
             }
         }
+        
+        private void OnCollisionExit(Collision other)
+        {
+            if (other.gameObject.CompareTag("MovingPlatform"))
+            {
+                platform = null;
+                transform.SetParent(null);
+            }
+        }
     }
 }
