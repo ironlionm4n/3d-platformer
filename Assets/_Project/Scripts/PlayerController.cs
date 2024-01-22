@@ -101,8 +101,6 @@ namespace Platformer._Project.Scripts
             input.Dash += OnDash;
         }
 
-
-
         private void OnDisable()
         {
             input.Jump -= OnJump;
